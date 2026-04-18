@@ -1,0 +1,34 @@
+name: Feature request
+description: Suggest an improvement or new capability for SpectraGlyph.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the scenario where the current app falls short.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Suggested solution
+      description: What would make this better? UI change, new export option, new DSP behavior, etc.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds or other tools you tried.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope hint
+      options:
+        - label: UI / UX
+        - label: Watermark DSP (STFT, masking, strength)
+        - label: Audio I/O or formats
+        - label: Release / packaging / CI
+        - label: Localization / accessibility

@@ -1,0 +1,59 @@
+name: Bug report
+description: Something in SpectraGlyph isn't working as expected.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill in as much as you can.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the problem, including what you expected.
+      placeholder: Tell us what you saw and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps. If possible attach a tiny sample audio/image.
+      placeholder: |
+        1. Open SpectraGlyph 0.2.0
+        2. Drop `example.wav`
+        3. Click Export
+        4. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: SpectraGlyph version
+      description: From the Help menu or the `.exe` filename.
+      placeholder: 0.2.0
+    validations:
+      required: true
+  - type: dropdown
+    id: run-mode
+    attributes:
+      label: How did you run it?
+      options:
+        - Packaged .exe from GitHub Releases
+        - From source (python main.py)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11 23H2 / Windows 10 22H2 / ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or tracebacks
+      description: Any text shown in the status bar, or the console when running from source.
+      render: shell
