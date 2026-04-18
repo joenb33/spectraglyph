@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import base64
 import binascii
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from PySide6.QtCore import QByteArray, Qt, QTimer
+from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
@@ -53,6 +59,7 @@ from ..utils.config import (
     Presets,
     normalized_existing_dir,
     save_app_settings,
+    update_recent_files,
 )
 from ..utils.worker import Worker, pool
 from .controls_panel import ControlsPanel, WatermarkSettings
@@ -91,6 +98,12 @@ class MainWindow(QMainWindow):
         self._last_load_start_s: float = 0.0
         self._last_load_duration_param: float | None = None
 
+        # Playback state
+        self._media_player: QMediaPlayer | None = None
+        self._audio_output: QAudioOutput | None = None
+        self._play_tmp_path: str | None = None
+        self._play_pending_watermarked = False
+
         self._build_ui()
         self._restore_window_state()
         self._setup_shortcuts()
@@ -101,6 +114,7 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self):
         tr = self._tr
+        self._build_file_menu()
         self._build_language_menu()
 
         central = QWidget()
@@ -125,6 +139,13 @@ class MainWindow(QMainWindow):
         self._toggle_preview_btn.setChecked(True)
         self._toggle_preview_btn.toggled.connect(lambda _: self._schedule_preview())
         top.addWidget(self._toggle_preview_btn)
+
+        self._play_btn = QPushButton(tr.play_preview)
+        self._play_btn.setToolTip(tr.play_tooltip)
+        self._play_btn.setMinimumHeight(34)
+        self._play_btn.setEnabled(False)
+        self._play_btn.clicked.connect(self._toggle_playback)
+        top.addWidget(self._play_btn)
         root.addLayout(top)
 
         self._splitter = QSplitter(Qt.Horizontal)
@@ -152,6 +173,69 @@ class MainWindow(QMainWindow):
         self._hint(tr.status_hint_drop)
 
         self._build_help_menu()
+
+    def _build_file_menu(self) -> None:
+        tr = self._tr
+        file_menu = self.menuBar().addMenu(tr.menu_file)
+        open_act = QAction(tr.file_open, self)
+        open_act.setShortcut(QKeySequence("Ctrl+O"))
+        open_act.triggered.connect(self._pick_audio)
+        file_menu.addAction(open_act)
+
+        self._recent_menu = file_menu.addMenu(tr.file_recent)
+        self._populate_recent_menu()
+
+        file_menu.addSeparator()
+        export_act = QAction(tr.file_export, self)
+        export_act.setShortcut(QKeySequence("Ctrl+E"))
+        export_act.triggered.connect(self._export)
+        file_menu.addAction(export_act)
+
+        file_menu.addSeparator()
+        exit_act = QAction(tr.file_exit, self)
+        exit_act.triggered.connect(self.close)
+        file_menu.addAction(exit_act)
+
+    def _populate_recent_menu(self) -> None:
+        tr = self._tr
+        menu = self._recent_menu
+        menu.clear()
+        files = self._lang_settings.recent_audio_files
+        if not files:
+            placeholder = menu.addAction(tr.file_recent_empty)
+            placeholder.setEnabled(False)
+            return
+        for path in files:
+            act = QAction(self._recent_label(path), self)
+            act.setData(path)
+            act.setToolTip(path)
+            act.triggered.connect(lambda _=False, p=path: self._open_recent(p))
+            menu.addAction(act)
+        menu.addSeparator()
+        clear_act = QAction(tr.file_recent_clear, self)
+        clear_act.triggered.connect(self._clear_recent_files)
+        menu.addAction(clear_act)
+
+    def _recent_label(self, path: str) -> str:
+        p = Path(path)
+        parent = p.parent.name or str(p.parent)
+        return f"{p.name}  —  {parent}"
+
+    def _open_recent(self, path: str) -> None:
+        if not Path(path).is_file():
+            self._hint(self._tr.recent_missing.format(path=path))
+            self._lang_settings.recent_audio_files = [
+                p for p in self._lang_settings.recent_audio_files if p != path
+            ]
+            save_app_settings(self._lang_settings)
+            self._populate_recent_menu()
+            return
+        self._request_load_audio(path)
+
+    def _clear_recent_files(self) -> None:
+        self._lang_settings.recent_audio_files = []
+        save_app_settings(self._lang_settings)
+        self._populate_recent_menu()
 
     def _build_help_menu(self) -> None:
         tr = self._tr
@@ -199,12 +283,15 @@ class MainWindow(QMainWindow):
     def _apply_strings(self) -> None:
         tr = self._tr
         self.menuBar().clear()
+        self._build_file_menu()
         self._build_language_menu()
         self._build_help_menu()
 
         self._load_audio_btn.setText(tr.choose_audio)
         self._load_audio_btn.setToolTip(tr.choose_audio_tooltip)
         self._toggle_preview_btn.setText(tr.preview_watermark)
+        self._play_btn.setToolTip(tr.play_tooltip)
+        self._update_play_btn_label()
         self.source_panel.set_strings(tr)
         self.controls_panel.set_strings(tr)
         self.spectrogram_view.set_strings(tr)
@@ -232,6 +319,8 @@ class MainWindow(QMainWindow):
             save_app_settings(self._lang_settings)
         except OSError:
             pass
+        self._stop_playback()
+        self._cleanup_tmp_playback()
         super().closeEvent(event)
 
     def _push_busy(self) -> None:
@@ -250,6 +339,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+O"), self, activated=self._pick_audio)
         QShortcut(QKeySequence("Ctrl+I"), self, activated=self.source_panel.open_image_dialog)
         QShortcut(QKeySequence("Ctrl+E"), self, activated=self._export)
+        QShortcut(QKeySequence(Qt.Key_Space), self, activated=self._toggle_playback)
 
     def _wire_signals(self):
         self.controls_panel.settings_changed.connect(self._on_settings_changed)
@@ -368,8 +458,14 @@ class MainWindow(QMainWindow):
     def _on_audio_loaded(self, audio: AudioData, path: str):
         self._audio = audio
         self._audio_path = path
+        self._stop_playback()
+        self._play_btn.setEnabled(True)
         self._lang_settings.last_audio_dir = str(Path(path).parent)
+        self._lang_settings.recent_audio_files = update_recent_files(
+            self._lang_settings.recent_audio_files, path
+        )
         save_app_settings(self._lang_settings)
+        self._populate_recent_menu()
         self._update_audio_label()
         self.controls_panel.apply_audio_info(audio.duration_s, audio.sample_rate)
         lo, hi = recommend_freq_range(audio.sample_rate, self.controls_panel.settings().mode)
@@ -430,7 +526,12 @@ class MainWindow(QMainWindow):
     def _on_settings_changed(self, s: WatermarkSettings):
         # Keep bg options on source panel in sync.
         self.source_panel.set_bg_options(
-            MaskOptions(mode=s.bg_mode, threshold=s.bg_threshold, invert=s.invert)
+            MaskOptions(
+                mode=s.bg_mode,
+                threshold=s.bg_threshold,
+                chroma_rgb=s.chroma_rgb,
+                invert=s.invert,
+            )
         )
         self._apply_region_from_settings()
         self._schedule_preview()
@@ -484,6 +585,108 @@ class MainWindow(QMainWindow):
         self._pending_preview = False
         self._hint(self._tr.preview_error.format(msg=msg))
 
+    # ---------- Playback ----------
+
+    def _ensure_media_player(self) -> QMediaPlayer:
+        if self._media_player is None:
+            self._media_player = QMediaPlayer(self)
+            self._audio_output = QAudioOutput(self)
+            self._media_player.setAudioOutput(self._audio_output)
+            self._media_player.playbackStateChanged.connect(self._on_playback_state)
+            self._media_player.errorOccurred.connect(self._on_playback_error)
+        return self._media_player
+
+    def _is_playing(self) -> bool:
+        return (
+            self._media_player is not None
+            and self._media_player.playbackState() == QMediaPlayer.PlayingState
+        )
+
+    def _update_play_btn_label(self) -> None:
+        tr = self._tr
+        self._play_btn.setText(tr.stop_preview if self._is_playing() else tr.play_preview)
+
+    def _toggle_playback(self) -> None:
+        if self._audio is None or not self._audio_path:
+            self._hint(self._tr.play_needs_audio)
+            return
+        if self._is_playing():
+            self._stop_playback()
+            return
+        want_watermarked = self._toggle_preview_btn.isChecked() and (
+            self.source_panel.current_mask() is not None
+        )
+        if want_watermarked:
+            self._start_watermarked_playback()
+        else:
+            self._start_original_playback()
+
+    def _start_original_playback(self) -> None:
+        player = self._ensure_media_player()
+        player.setSource(QUrl.fromLocalFile(str(Path(self._audio_path).resolve())))
+        player.play()
+        self._update_play_btn_label()
+
+    def _start_watermarked_playback(self) -> None:
+        if self._audio is None:
+            return
+        mask = self.source_panel.current_mask()
+        if mask is None:
+            self._start_original_playback()
+            return
+        self._play_pending_watermarked = True
+        self._hint(self._tr.play_preparing)
+        params = _settings_to_params(self.controls_panel.settings())
+        audio = self._audio
+
+        def do_render():
+            out = embed_watermark(audio.samples, audio.sample_rate, mask, params)
+            tmp = tempfile.NamedTemporaryFile(
+                prefix="spectraglyph_play_", suffix=".wav", delete=False
+            )
+            tmp.close()
+            save_audio(tmp.name, AudioData(samples=out, sample_rate=audio.sample_rate))
+            return tmp.name
+
+        w = Worker(do_render)
+        w.signals.finished.connect(self._on_watermarked_ready)
+        w.signals.failed.connect(self._on_playback_render_failed)
+        pool().start(w)
+
+    def _on_watermarked_ready(self, tmp_path: str) -> None:
+        self._play_pending_watermarked = False
+        self._cleanup_tmp_playback()
+        self._play_tmp_path = tmp_path
+        player = self._ensure_media_player()
+        player.setSource(QUrl.fromLocalFile(tmp_path))
+        player.play()
+        self._update_play_btn_label()
+
+    def _on_playback_render_failed(self, msg: str) -> None:
+        self._play_pending_watermarked = False
+        self._hint(self._tr.play_failed.format(msg=msg))
+
+    def _stop_playback(self) -> None:
+        if self._media_player is not None:
+            self._media_player.stop()
+        self._update_play_btn_label()
+
+    def _on_playback_state(self, _state) -> None:
+        self._update_play_btn_label()
+
+    def _on_playback_error(self, _err, msg: str) -> None:
+        if msg:
+            self._hint(self._tr.play_failed.format(msg=msg))
+        self._update_play_btn_label()
+
+    def _cleanup_tmp_playback(self) -> None:
+        if self._play_tmp_path and os.path.isfile(self._play_tmp_path):
+            try:
+                os.unlink(self._play_tmp_path)
+            except OSError:
+                pass
+        self._play_tmp_path = None
+
     # ---------- Export ----------
 
     def _export(self):
@@ -530,11 +733,48 @@ class MainWindow(QMainWindow):
         save_app_settings(self._lang_settings)
         self.controls_panel.set_export_enabled(True)
         self._hint(tr.export_saved_status.format(path=path))
-        QMessageBox.information(
-            self,
-            tr.export_done_title,
-            tr.export_done_body.format(path=path),
-        )
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle(tr.export_done_title)
+        box.setText(tr.export_done_body.format(path=path))
+        audacity_btn = box.addButton(tr.export_done_open_audacity, QMessageBox.ActionRole)
+        folder_btn = box.addButton(tr.export_done_show_folder, QMessageBox.ActionRole)
+        close_btn = box.addButton(tr.export_done_close, QMessageBox.AcceptRole)
+        box.setDefaultButton(close_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is audacity_btn:
+            self._open_in_audacity(path)
+        elif clicked is folder_btn:
+            self._show_in_folder(path)
+
+    def _open_in_audacity(self, path: str) -> None:
+        exe = _find_audacity()
+        if exe is None:
+            self._error(self._tr.audacity_not_found)
+            return
+        try:
+            subprocess.Popen([exe, path], close_fds=True)
+        except OSError as exc:
+            self._error(self._tr.audacity_not_found + f" ({exc})")
+
+    def _show_in_folder(self, path: str) -> None:
+        p = Path(path).resolve()
+        if sys.platform == "win32":
+            try:
+                subprocess.Popen(["explorer", f"/select,{p}"], close_fds=True)
+                return
+            except OSError:
+                pass
+        # Fallback: open the containing folder.
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(p.parent)], close_fds=True)
+            else:
+                subprocess.Popen(["xdg-open", str(p.parent)], close_fds=True)
+        except OSError:
+            pass
 
     # ---------- Presets ----------
 
@@ -555,6 +795,7 @@ class MainWindow(QMainWindow):
             bg_mode=s.bg_mode,
             bg_threshold=s.bg_threshold,
             invert=s.invert,
+            chroma_rgb=s.chroma_rgb,
         )
         self._presets.items = [p for p in self._presets.items if p.name != preset.name]
         self._presets.items.append(preset)
@@ -595,6 +836,28 @@ class MainWindow(QMainWindow):
     def _error(self, msg: str):
         self.statusBar().showMessage(msg, 10000)
         QMessageBox.critical(self, self._tr.error_title, msg)
+
+
+_AUDACITY_WIN_PATHS = (
+    r"C:\Program Files\Audacity\Audacity.exe",
+    r"C:\Program Files (x86)\Audacity\Audacity.exe",
+)
+
+
+def _find_audacity() -> str | None:
+    """Locate Audacity. Checks PATH, typical Windows install dirs, and LOCALAPPDATA."""
+    on_path = shutil.which("audacity") or shutil.which("Audacity")
+    if on_path:
+        return on_path
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA")
+        candidates = list(_AUDACITY_WIN_PATHS)
+        if local:
+            candidates.append(str(Path(local) / "Programs" / "Audacity" / "Audacity.exe"))
+        for c in candidates:
+            if os.path.isfile(c):
+                return c
+    return None
 
 
 def _settings_to_params(s: WatermarkSettings) -> WatermarkParams:

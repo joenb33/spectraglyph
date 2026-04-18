@@ -24,6 +24,11 @@ class AppSettings:
     window_geometry_b64: str = ""
     # Main splitter [spectrogram, right panel]; empty means use defaults in the UI
     splitter_sizes: list[int] = field(default_factory=lambda: [820, 520])
+    # Most-recently-opened audio files (most recent first); capped at RECENT_FILES_MAX.
+    recent_audio_files: list[str] = field(default_factory=list)
+
+
+RECENT_FILES_MAX = 8
 
 
 def _appdata_config_dir() -> Path:
@@ -108,6 +113,11 @@ def load_app_settings() -> AppSettings:
             sizes = [820, 520]
         else:
             sizes = [int(sizes[0]), int(sizes[1])]
+        recents_raw = raw.get("recent_audio_files") or []
+        if isinstance(recents_raw, list):
+            recents = [str(p) for p in recents_raw if isinstance(p, str) and p]
+        else:
+            recents = []
         return AppSettings(
             ui_language=lang,
             last_audio_dir=str(raw.get("last_audio_dir") or ""),
@@ -115,9 +125,33 @@ def load_app_settings() -> AppSettings:
             last_export_dir=str(raw.get("last_export_dir") or ""),
             window_geometry_b64=str(raw.get("window_geometry_b64") or ""),
             splitter_sizes=sizes,
+            recent_audio_files=recents[:RECENT_FILES_MAX],
         )
     except (json.JSONDecodeError, TypeError, OSError, ValueError):
         return AppSettings()
+
+
+def update_recent_files(recents: list[str], path: str) -> list[str]:
+    """Return a new list with ``path`` at the front, dedup'd, capped to RECENT_FILES_MAX."""
+    if not path:
+        return list(recents)
+    try:
+        canonical = str(Path(path).resolve())
+    except OSError:
+        canonical = path
+    out: list[str] = [canonical]
+    seen = {canonical.lower()}
+    for p in recents:
+        if not p:
+            continue
+        key = p.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+        if len(out) >= RECENT_FILES_MAX:
+            break
+    return out
 
 
 def save_app_settings(settings: AppSettings) -> None:
@@ -129,6 +163,7 @@ def save_app_settings(settings: AppSettings) -> None:
         "last_export_dir": settings.last_export_dir,
         "window_geometry_b64": settings.window_geometry_b64,
         "splitter_sizes": settings.splitter_sizes,
+        "recent_audio_files": settings.recent_audio_files,
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -145,6 +180,7 @@ class Preset:
     bg_mode: str = "alpha"
     bg_threshold: float = 0.15
     invert: bool = False
+    chroma_rgb: tuple[int, int, int] = (0, 255, 0)
 
 
 @dataclass
@@ -158,8 +194,17 @@ class Presets:
             return cls(items=_default_presets())
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-            return cls(items=[Preset(**p) for p in raw.get("items", [])])
-        except (json.JSONDecodeError, TypeError, KeyError):
+            items: list[Preset] = []
+            for p in raw.get("items", []):
+                if "chroma_rgb" in p:
+                    c = p["chroma_rgb"]
+                    if isinstance(c, (list, tuple)) and len(c) == 3:
+                        p["chroma_rgb"] = (int(c[0]), int(c[1]), int(c[2]))
+                    else:
+                        p.pop("chroma_rgb", None)
+                items.append(Preset(**p))
+            return cls(items=items)
+        except (json.JSONDecodeError, TypeError, KeyError, ValueError):
             return cls(items=_default_presets())
 
     def save(self) -> None:

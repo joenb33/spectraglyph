@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QColorDialog,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -32,6 +34,8 @@ class WatermarkSettings:
     bg_mode: str = "alpha"
     bg_threshold: float = 0.15
     invert: bool = False
+    # Chroma key in RGB 0-255 used when bg_mode == "chroma"; default green-screen.
+    chroma_rgb: tuple[int, int, int] = (0, 255, 0)
 
 
 class ControlsPanel(QWidget):
@@ -74,6 +78,10 @@ class ControlsPanel(QWidget):
         self.copy_btn.setToolTip(tr.view_guide_tooltip)
         self.export_btn.setText(tr.export)
         self.export_btn.setToolTip(tr.export_tooltip)
+        self.chroma_btn.setText(tr.chroma_color_btn)
+        self.chroma_btn.setToolTip(
+            tr.chroma_current_tooltip.format(rgb=_rgb_hex(self._settings.chroma_rgb))
+        )
 
     def settings(self) -> WatermarkSettings:
         return self._settings
@@ -108,6 +116,7 @@ class ControlsPanel(QWidget):
             (tr.bg_auto, "auto"),
             (tr.bg_white, "remove_white"),
             (tr.bg_black, "remove_black"),
+            (tr.bg_chroma, "chroma"),
             (tr.bg_luminance, "luminance"),
         ]:
             self.bg_combo.addItem(label, key)
@@ -210,7 +219,17 @@ class ControlsPanel(QWidget):
         self._fill_bg_combo(tr)
         self.bg_combo.currentIndexChanged.connect(self._on_bg_changed)
         self._label_method = QLabel(tr.label_method)
-        bg_layout.addRow(self._label_method, self.bg_combo)
+        method_row = QHBoxLayout()
+        method_row.setContentsMargins(0, 0, 0, 0)
+        method_row.addWidget(self.bg_combo, 1)
+        self.chroma_btn = QPushButton(tr.chroma_color_btn)
+        self.chroma_btn.setToolTip(
+            tr.chroma_current_tooltip.format(rgb=_rgb_hex(self._settings.chroma_rgb))
+        )
+        self.chroma_btn.clicked.connect(self._pick_chroma_color)
+        self._style_chroma_btn()
+        method_row.addWidget(self.chroma_btn)
+        bg_layout.addRow(self._label_method, method_row)
 
         self.bg_thresh_slider = QSlider(Qt.Horizontal)
         self.bg_thresh_slider.setRange(1, 50)
@@ -297,6 +316,32 @@ class ControlsPanel(QWidget):
         self.bg_thresh_label.setText(f"{thr:.2f}")
         self._settings.bg_threshold = thr
         self._settings.invert = self.invert_checkbox.isChecked()
+        self._update_chroma_btn_visible()
+        self._emit()
+
+    def _update_chroma_btn_visible(self) -> None:
+        self.chroma_btn.setVisible(self._settings.bg_mode == "chroma")
+
+    def _style_chroma_btn(self) -> None:
+        r, g, b = self._settings.chroma_rgb
+        # Pick a readable foreground against the sampled color.
+        fg = "#000" if (r * 0.299 + g * 0.587 + b * 0.114) > 140 else "#fff"
+        self.chroma_btn.setStyleSheet(
+            f"QPushButton {{ background: rgb({r},{g},{b}); color: {fg};"
+            " border: 1px solid #555; padding: 2px 10px; border-radius: 3px; }"
+        )
+
+    def _pick_chroma_color(self) -> None:
+        r, g, b = self._settings.chroma_rgb
+        initial = QColor(r, g, b)
+        color = QColorDialog.getColor(initial, self, self._tr.chroma_pick_title)
+        if not color.isValid():
+            return
+        self._settings.chroma_rgb = (color.red(), color.green(), color.blue())
+        self._style_chroma_btn()
+        self.chroma_btn.setToolTip(
+            self._tr.chroma_current_tooltip.format(rgb=_rgb_hex(self._settings.chroma_rgb))
+        )
         self._emit()
 
     def apply_region_from_view(self, start_s: float, end_s: float, f_min: float, f_max: float):
@@ -333,7 +378,14 @@ class ControlsPanel(QWidget):
             self.bg_combo.setCurrentIndex(idx)
         self.bg_thresh_slider.setValue(int(round(s.bg_threshold * 100)))
         self.invert_checkbox.setChecked(s.invert)
+        self._style_chroma_btn()
+        self._update_chroma_btn_visible()
         self._emit()
 
     def _emit(self):
         self.settings_changed.emit(self._settings)
+
+
+def _rgb_hex(rgb: tuple[int, int, int]) -> str:
+    r, g, b = rgb
+    return f"#{r:02X}{g:02X}{b:02X}"

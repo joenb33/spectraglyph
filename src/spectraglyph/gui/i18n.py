@@ -23,11 +23,27 @@ class UIStrings:
     shortcuts_dialog_title: str
     shortcuts_dialog_body: str
 
+    # File menu + recents
+    menu_file: str
+    file_open: str
+    file_recent: str
+    file_recent_empty: str
+    file_recent_clear: str
+    file_export: str
+    file_exit: str
+    recent_missing: str
+
     # Main window
     choose_audio: str
     choose_audio_tooltip: str
     no_audio_loaded: str
     preview_watermark: str
+    play_preview: str
+    stop_preview: str
+    play_tooltip: str
+    play_needs_audio: str
+    play_failed: str
+    play_preparing: str
     status_hint_drop: str
     pick_audio_title: str
     pick_audio_filter: str
@@ -43,6 +59,10 @@ class UIStrings:
     export_error: str
     export_done_title: str
     export_done_body: str
+    export_done_open_audacity: str
+    export_done_show_folder: str
+    export_done_close: str
+    audacity_not_found: str
     save_preset_title: str
     preset_name_label: str
     preset_saved: str
@@ -75,7 +95,11 @@ class UIStrings:
     bg_auto: str
     bg_white: str
     bg_black: str
+    bg_chroma: str
     bg_luminance: str
+    chroma_color_btn: str
+    chroma_pick_title: str
+    chroma_current_tooltip: str
     label_method: str
     label_threshold: str
     invert: str
@@ -141,11 +165,26 @@ def _sv() -> UIStrings:
             "• Öppna ljudfil — Ctrl+O\n"
             "• Välj bild — Ctrl+I\n"
             "• Exportera ljud — Ctrl+E\n"
+            "• Spela upp / stoppa — Mellanslag\n"
         ),
+        menu_file="Arkiv",
+        file_open="Öppna ljudfil…",
+        file_recent="Senaste filer",
+        file_recent_empty="(inga senaste filer)",
+        file_recent_clear="Rensa lista",
+        file_export="Exportera…",
+        file_exit="Avsluta",
+        recent_missing="Filen finns inte längre: {path}",
         choose_audio="🎵  Välj ljudfil…",
         choose_audio_tooltip="Välj en ljudfil att bädda in vattenmärket i (Ctrl+O)",
         no_audio_loaded="Ingen ljudfil laddad",
         preview_watermark="👁  Förhandsgranska vattenmärke",
+        play_preview="▶  Spela",
+        stop_preview="■  Stoppa",
+        play_tooltip="Spela upp det som visas i spektrogrammet (original eller med vattenmärke, mellanslag).",
+        play_needs_audio="Ladda en ljudfil först innan du spelar.",
+        play_failed="Uppspelning misslyckades: {msg}",
+        play_preparing="Förbereder uppspelning med vattenmärke…",
         status_hint_drop="Dra in en ljudfil och en bild – sedan knappen 'Exportera'.",
         pick_audio_title="Välj ljudfil",
         pick_audio_filter="Ljudfiler ({exts})",
@@ -163,6 +202,12 @@ def _sv() -> UIStrings:
         export_done_body=(
             "Sparad till:\n{path}\n\n"
             "Öppna filen i Audacity eller Spek för att se vattenmärket."
+        ),
+        export_done_open_audacity="Öppna i Audacity",
+        export_done_show_folder="Visa i mapp",
+        export_done_close="Stäng",
+        audacity_not_found=(
+            "Hittar ingen Audacity-installation. Installera Audacity eller öppna filen manuellt."
         ),
         save_preset_title="Spara preset",
         preset_name_label="Namn:",
@@ -192,7 +237,11 @@ def _sv() -> UIStrings:
         bg_auto="Auto (hörnsampling)",
         bg_white="Ta bort vitt",
         bg_black="Ta bort svart",
+        bg_chroma="Ta bort färgnyckel…",
         bg_luminance="Luminans",
+        chroma_color_btn="Färg…",
+        chroma_pick_title="Välj färg att ta bort",
+        chroma_current_tooltip="Vald färgnyckel: {rgb}",
         label_method="Metod:",
         label_threshold="Tröskel:",
         invert="Invertera",
@@ -266,11 +315,26 @@ def _en() -> UIStrings:
             "• Open audio file — Ctrl+O\n"
             "• Choose image — Ctrl+I\n"
             "• Export audio — Ctrl+E\n"
+            "• Play / stop — Space\n"
         ),
+        menu_file="File",
+        file_open="Open audio…",
+        file_recent="Recent files",
+        file_recent_empty="(no recent files)",
+        file_recent_clear="Clear list",
+        file_export="Export…",
+        file_exit="Exit",
+        recent_missing="File no longer exists: {path}",
         choose_audio="🎵  Choose audio file…",
         choose_audio_tooltip="Pick an audio file to embed the watermark in (Ctrl+O)",
         no_audio_loaded="No audio file loaded",
         preview_watermark="👁  Preview watermark",
+        play_preview="▶  Play",
+        stop_preview="■  Stop",
+        play_tooltip="Play what the spectrogram shows (original or watermarked, Space).",
+        play_needs_audio="Load an audio file before playing.",
+        play_failed="Playback failed: {msg}",
+        play_preparing="Preparing watermarked playback…",
         status_hint_drop="Drop an audio file and an image — then use 'Export'.",
         pick_audio_title="Choose audio file",
         pick_audio_filter="Audio files ({exts})",
@@ -288,6 +352,12 @@ def _en() -> UIStrings:
         export_done_body=(
             "Saved to:\n{path}\n\n"
             "Open the file in Audacity or Spek to see the watermark."
+        ),
+        export_done_open_audacity="Open in Audacity",
+        export_done_show_folder="Show in folder",
+        export_done_close="Close",
+        audacity_not_found=(
+            "Could not find an Audacity install. Install Audacity or open the file manually."
         ),
         save_preset_title="Save preset",
         preset_name_label="Name:",
@@ -317,7 +387,11 @@ def _en() -> UIStrings:
         bg_auto="Auto (corner sampling)",
         bg_white="Remove white",
         bg_black="Remove black",
+        bg_chroma="Chroma key…",
         bg_luminance="Luminance",
+        chroma_color_btn="Color…",
+        chroma_pick_title="Pick chroma key color",
+        chroma_current_tooltip="Current chroma key: {rgb}",
         label_method="Method:",
         label_threshold="Threshold:",
         invert="Invert",

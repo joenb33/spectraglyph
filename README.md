@@ -36,12 +36,14 @@ Human speech and most music concentrate energy **below ~8 kHz**. SpectraGlyph pa
 |---|---|
 | **Dual modes** | **Invisible (>15 kHz)** — watermark above the vocal/instrument body; **Full range** — use the whole spectrum for bolder visuals (may color the sound at high strength). |
 | **Image or text** | Drop PNG/JPG/WebP or type directly in the app — your message becomes part of the spectrum. |
-| **Masking toolkit** | Alpha, auto-detect background, remove white/black, luminance, invert — get a crisp mask without leaving the UI. |
+| **Masking toolkit** | Alpha, auto-detect background, remove white/black, **chroma key (any color)**, luminance, invert — get a crisp mask without leaving the UI. |
 | **Live spectrogram** | Pan and resize the **time × frequency** region; preview updates follow your edits. |
-| **Export** | Write **WAV**, **FLAC**, or **MP3** (with a heads-up when codecs affect watermark fidelity). |
+| **Play before you share** | **▶ Play** the spectrogram view (original or watermarked) through your speakers to confirm it really is inaudible. |
+| **Export** | Write **WAV**, **FLAC**, or **MP3** (with a heads-up when codecs affect watermark fidelity). After export, **Open in Audacity** or **Show in folder** with one click. |
+| **Recent files** | **File → Recent files** remembers the last eight audio files you loaded. |
 | **Presets + view guide** | Save recipes; **copy FFT settings** to the clipboard so viewers can paste the same view into Audacity and see exactly what you intended. |
 | **Languages** | **Swedish** and **English** — **View → Language** (saved under the [paths in Localization](#localization)). |
-| **Shortcuts & help** | **Ctrl+O** / **Ctrl+I** / **Ctrl+E**; **Help → Keyboard shortcuts…** lists them. |
+| **Shortcuts & help** | **Ctrl+O** / **Ctrl+I** / **Ctrl+E** / **Space**; **Help → Keyboard shortcuts…** lists them. |
 | **Where data is stored** | Next to **`SpectraGlyph.exe`**: `SpectraGlyph_data\` (settings + presets) when writable; otherwise `%APPDATA%\SpectraGlyph`. Window size and last open/save folders are remembered. |
 | **Long audio** | Files **> ~2 min** or **> ~40 MB** trigger a choice: load everything or only a **time range** (faster). Progress is shown while decoding and building the spectrogram. |
 
