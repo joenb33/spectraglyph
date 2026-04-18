@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import numpy as np
@@ -146,6 +146,74 @@ def embed_watermark(
     peak = float(np.max(np.abs(out))) if out.size else 0.0
     if peak > 0.999:
         out = out * (0.999 / peak)
+    return out.astype(np.float32, copy=False)
+
+
+def embed_watermark_local(
+    audio: np.ndarray,
+    sr: int,
+    mask01: np.ndarray,
+    params: WatermarkParams,
+) -> np.ndarray:
+    """Same result as ``embed_watermark`` but runs STFT/ISTFT only on the watermark window.
+
+    Much faster than :func:`embed_watermark` on long audio — the watermark stamp is
+    time-local (only non-zero inside ``[start_s, start_s + duration_s]``), so we only
+    need a short STFT/ISTFT pair to build it. Samples outside that window are returned
+    unchanged (unlike :func:`embed_watermark`, which may apply a global post-scaling if
+    the mixed signal clips). For preview this is the desired behavior; use the regular
+    :func:`embed_watermark` for the final export path if you want the historical
+    clip-guard on the full file.
+    """
+    if audio.ndim == 2:
+        channels = [
+            embed_watermark_local(audio[:, c], sr, mask01, params)
+            for c in range(audio.shape[1])
+        ]
+        return np.stack(channels, axis=1)
+
+    audio = audio.astype(np.float32, copy=False)
+    length = len(audio)
+    if length == 0:
+        return audio.copy()
+
+    # Pad one FFT window on each side so the ISTFT boundary-taper lives inside the slice.
+    pad_s = params.n_fft / sr
+    win_start_s = max(0.0, params.start_s - pad_s)
+    win_end_s = min(length / sr, params.start_s + params.duration_s + pad_s)
+    s0 = int(round(win_start_s * sr))
+    s1 = int(round(win_end_s * sr))
+    if s1 <= s0:
+        return audio.copy()
+
+    local_audio = audio[s0:s1]
+    local_params = replace(params, start_s=params.start_s - win_start_s)
+
+    local_length = s1 - s0
+    stamp_local = _build_stamp_audio(local_length, sr, mask01, local_params)
+
+    region_start = int(round(local_params.start_s * sr))
+    region_end = int(round((local_params.start_s + local_params.duration_s) * sr))
+    region_start = max(0, min(region_start, local_length))
+    region_end = max(region_start + 1, min(region_end, local_length))
+    if not np.any(stamp_local):
+        return audio.copy()
+
+    audio_window = local_audio[region_start:region_end]
+    audio_rms = float(np.sqrt(np.mean(audio_window ** 2))) if audio_window.size else 0.0
+    audio_rms = max(audio_rms, 1e-4)
+    stamp_rms = float(np.sqrt(np.mean(stamp_local[region_start:region_end] ** 2))) or 1e-9
+    target_rms = audio_rms * (10.0 ** (params.strength_db / 20.0))
+    gain = target_rms / stamp_rms
+
+    out = audio.copy()
+    out[s0:s1] = out[s0:s1] + stamp_local * gain
+
+    # Clip-guard the local window only. The rest of the audio is byte-identical to the
+    # input, so there's no seam to worry about at the boundary.
+    local_peak = float(np.max(np.abs(out[s0:s1])))
+    if local_peak > 0.999:
+        out[s0:s1] *= 0.999 / local_peak
     return out.astype(np.float32, copy=False)
 
 

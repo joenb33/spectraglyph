@@ -13,6 +13,7 @@ class SpectrogramView(pg.GraphicsLayoutWidget):
     """Live spectrogram viewer with a draggable/resizable watermark region."""
 
     region_changed = Signal(float, float, float, float)  # start_s, end_s, f_min, f_max
+    seek_requested = Signal(float)  # seconds — user clicked on the spectrogram
 
     def __init__(self, tr: UIStrings, parent=None):
         super().__init__(parent)
@@ -39,6 +40,19 @@ class SpectrogramView(pg.GraphicsLayoutWidget):
         self._plot.addItem(self._placeholder)
         self._current_spec: SpectrogramImage | None = None
         self._suppress_emit = False
+
+        # Vertical playhead — hidden until playback starts.
+        self._playhead = pg.InfiniteLine(
+            angle=90,
+            movable=False,
+            pen=pg.mkPen(QColor(255, 90, 90), width=2),
+        )
+        self._playhead.setZValue(10)
+        self._playhead.hide()
+        self._plot.addItem(self._playhead, ignoreBounds=True)
+
+        # Seek-on-click handler.
+        self.scene().sigMouseClicked.connect(self._on_mouse_clicked)
 
     def set_strings(self, tr: UIStrings) -> None:
         self._tr = tr
@@ -107,6 +121,40 @@ class SpectrogramView(pg.GraphicsLayoutWidget):
         end_s = float(start_s + size.x())
         f_max = float(f_min + size.y())
         self.region_changed.emit(start_s, end_s, f_min, f_max)
+
+    # ---------- Playhead / seek ----------
+
+    def set_playhead(self, seconds: float | None) -> None:
+        if seconds is None:
+            self._playhead.hide()
+            return
+        self._playhead.setValue(float(seconds))
+        if not self._playhead.isVisible():
+            self._playhead.show()
+
+    def _on_mouse_clicked(self, event) -> None:
+        if self._current_spec is None:
+            return
+        if event.button() != Qt.LeftButton:
+            return
+        vb = self._plot.getViewBox()
+        if vb is None:
+            return
+        # Ignore clicks inside the ROI (drag/resize) or on the ROI's handles.
+        if self._region is not None:
+            items_under = self._plot.scene().items(event.scenePos())
+            for it in items_under:
+                # The ROI itself and its scale handles should not trigger seeks.
+                if it is self._region or getattr(it, "parentItem", lambda: None)() is self._region:
+                    return
+        pt = vb.mapSceneToView(event.scenePos())
+        seconds = float(pt.x())
+        t_max = float(self._current_spec.times[-1]) if self._current_spec.times.size else 0.0
+        if seconds < 0.0 or seconds > t_max:
+            return
+        event.accept()
+        self.set_playhead(seconds)
+        self.seek_requested.emit(seconds)
 
 
 _LUT_CACHE: np.ndarray | None = None

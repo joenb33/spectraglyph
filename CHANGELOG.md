@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-04-18
+
+### Added
+
+- **Playhead + click-to-seek** on the spectrogram preview: a red vertical line shows the playback position while playing; click anywhere on the spectrogram to jump to that time (and to start playback if nothing is playing). Clicks inside the watermark region are ignored so drag/resize keeps working.
+
+### Changed
+
+- **Much faster preview when dragging the watermark region.** The preview now embeds the watermark only in a short window around the selected time range and splices that window's spectrogram columns into the cached original — instead of re-embedding across the entire file and recomputing the full spectrogram on every update. On long audio this removes the biggest source of lag.
+- **Instant Play after the preview updates.** The watermarked samples produced by the preview are cached and reused by **Play**, so you no longer wait for a second watermark render the moment you press play. If you press Play before the preview has caught up, the old render path runs as a fallback.
+
 ## [0.2.1] - 2026-04-18
 
 ### Added
@@ -47,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial public release: embed images or text as a near-inaudible spectral watermark in exported audio (WAV / FLAC / MP3).
 - Swedish desktop UI (PySide6), live spectrogram preview, masking tools, presets, and export with viewer-oriented FFT hints.
 
+[0.2.2]: https://github.com/joenb33/spectraglyph/releases/tag/v0.2.2
 [0.2.1]: https://github.com/joenb33/spectraglyph/releases/tag/v0.2.1
 [0.2.0]: https://github.com/joenb33/spectraglyph/releases/tag/v0.2.0
 [0.1.0]: https://github.com/joenb33/spectraglyph/releases/tag/v0.1.0

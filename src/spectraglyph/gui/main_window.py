@@ -51,8 +51,18 @@ from ..core.audio_io import (
     save_audio,
 )
 from ..core.image_processor import MaskOptions
-from ..core.spectrogram_renderer import SpectrogramImage, compute_spectrogram
-from ..core.watermark import WatermarkParams, embed_watermark, recommend_freq_range
+from ..core.spectrogram_renderer import (
+    SpectrogramImage,
+    compute_spectrogram,
+    compute_spectrogram_patch,
+    splice_spectrogram_patch,
+)
+from ..core.watermark import (
+    WatermarkParams,
+    embed_watermark,
+    embed_watermark_local,
+    recommend_freq_range,
+)
 from ..utils.config import (
     AppSettings,
     Preset,
@@ -103,6 +113,12 @@ class MainWindow(QMainWindow):
         self._audio_output: QAudioOutput | None = None
         self._play_tmp_path: str | None = None
         self._play_pending_watermarked = False
+        # Cached watermarked audio from the last preview render — reused by Play
+        # to avoid re-running embed_watermark on every press.
+        self._wm_samples_cache: np.ndarray | None = None
+        self._play_mode_watermarked: bool = False
+        self._play_duration_ms: int = 0
+        self._seek_pending_ms: int | None = None
 
         self._build_ui()
         self._restore_window_state()
@@ -349,6 +365,7 @@ class MainWindow(QMainWindow):
         self.controls_panel.copy_view_guide_requested.connect(self._copy_view_guide)
         self.source_panel.mask_changed.connect(self._on_mask_changed)
         self.spectrogram_view.region_changed.connect(self._on_region_dragged)
+        self.spectrogram_view.seek_requested.connect(self._on_seek_requested)
 
     # ---------- Drag and drop ----------
 
@@ -551,6 +568,8 @@ class MainWindow(QMainWindow):
     # ---------- Preview ----------
 
     def _schedule_preview(self):
+        # Any pending settings/mask change invalidates the cached watermarked samples.
+        self._wm_samples_cache = None
         self._preview_timer.start()
 
     def _rebuild_preview(self):
@@ -570,14 +589,17 @@ class MainWindow(QMainWindow):
         params = _settings_to_params(s)
         audio = self._audio.samples
         sr = self._audio.sample_rate
-        w = Worker(_compute_preview, audio, sr, mask, params)
+        base = self._spec_original
+        w = Worker(_compute_preview, audio, sr, mask, params, base)
         w.signals.finished.connect(self._on_preview_ready)
         w.signals.failed.connect(lambda m: self._preview_failed(m))
         pool().start(w)
 
-    def _on_preview_ready(self, spec: SpectrogramImage):
+    def _on_preview_ready(self, result: tuple):
         self._pending_preview = False
+        spec, samples = result
         self._spec_preview = spec
+        self._wm_samples_cache = samples
         self.spectrogram_view.set_spectrogram(spec)
         self._apply_region_from_settings()
 
@@ -594,6 +616,8 @@ class MainWindow(QMainWindow):
             self._media_player.setAudioOutput(self._audio_output)
             self._media_player.playbackStateChanged.connect(self._on_playback_state)
             self._media_player.errorOccurred.connect(self._on_playback_error)
+            self._media_player.positionChanged.connect(self._on_playback_position)
+            self._media_player.durationChanged.connect(self._on_playback_duration)
         return self._media_player
 
     def _is_playing(self) -> bool:
@@ -622,8 +646,12 @@ class MainWindow(QMainWindow):
             self._start_original_playback()
 
     def _start_original_playback(self) -> None:
+        self._play_mode_watermarked = False
         player = self._ensure_media_player()
         player.setSource(QUrl.fromLocalFile(str(Path(self._audio_path).resolve())))
+        if self._seek_pending_ms is not None:
+            player.setPosition(self._seek_pending_ms)
+            self._seek_pending_ms = None
         player.play()
         self._update_play_btn_label()
 
@@ -634,10 +662,30 @@ class MainWindow(QMainWindow):
         if mask is None:
             self._start_original_playback()
             return
+        self._play_mode_watermarked = True
+        audio = self._audio
+        # Fast path: preview already computed the watermarked samples — write them
+        # straight to a tmp WAV instead of re-running the embed.
+        if self._wm_samples_cache is not None and len(self._wm_samples_cache) == len(audio.samples):
+            try:
+                tmp = tempfile.NamedTemporaryFile(
+                    prefix="spectraglyph_play_", suffix=".wav", delete=False
+                )
+                tmp.close()
+                save_audio(
+                    tmp.name,
+                    AudioData(samples=self._wm_samples_cache, sample_rate=audio.sample_rate),
+                )
+                self._on_watermarked_ready(tmp.name)
+                return
+            except OSError as exc:
+                self._hint(self._tr.play_failed.format(msg=str(exc)))
+                return
+
+        # Slow path: no cached samples yet — render in a worker.
         self._play_pending_watermarked = True
         self._hint(self._tr.play_preparing)
         params = _settings_to_params(self.controls_panel.settings())
-        audio = self._audio
 
         def do_render():
             out = embed_watermark(audio.samples, audio.sample_rate, mask, params)
@@ -646,12 +694,17 @@ class MainWindow(QMainWindow):
             )
             tmp.close()
             save_audio(tmp.name, AudioData(samples=out, sample_rate=audio.sample_rate))
-            return tmp.name
+            return (tmp.name, out)
 
         w = Worker(do_render)
-        w.signals.finished.connect(self._on_watermarked_ready)
+        w.signals.finished.connect(self._on_watermarked_render_ready)
         w.signals.failed.connect(self._on_playback_render_failed)
         pool().start(w)
+
+    def _on_watermarked_render_ready(self, result: tuple) -> None:
+        tmp_path, samples = result
+        self._wm_samples_cache = samples
+        self._on_watermarked_ready(tmp_path)
 
     def _on_watermarked_ready(self, tmp_path: str) -> None:
         self._play_pending_watermarked = False
@@ -659,6 +712,9 @@ class MainWindow(QMainWindow):
         self._play_tmp_path = tmp_path
         player = self._ensure_media_player()
         player.setSource(QUrl.fromLocalFile(tmp_path))
+        if self._seek_pending_ms is not None:
+            player.setPosition(self._seek_pending_ms)
+            self._seek_pending_ms = None
         player.play()
         self._update_play_btn_label()
 
@@ -669,15 +725,55 @@ class MainWindow(QMainWindow):
     def _stop_playback(self) -> None:
         if self._media_player is not None:
             self._media_player.stop()
+        self.spectrogram_view.set_playhead(None)
         self._update_play_btn_label()
 
     def _on_playback_state(self, _state) -> None:
+        if not self._is_playing():
+            self.spectrogram_view.set_playhead(None)
         self._update_play_btn_label()
 
     def _on_playback_error(self, _err, msg: str) -> None:
         if msg:
             self._hint(self._tr.play_failed.format(msg=msg))
         self._update_play_btn_label()
+
+    def _on_playback_position(self, ms: int) -> None:
+        if self._audio is None or not self._is_playing():
+            return
+        self.spectrogram_view.set_playhead(ms / 1000.0)
+
+    def _on_playback_duration(self, ms: int) -> None:
+        self._play_duration_ms = int(ms)
+
+    def _on_seek_requested(self, seconds: float) -> None:
+        """User clicked the spectrogram — seek or start playback at that time."""
+        if self._audio is None or not self._audio_path:
+            return
+        seconds = max(0.0, min(float(self._audio.duration_s), float(seconds)))
+        target_ms = int(seconds * 1000)
+        want_watermarked = self._toggle_preview_btn.isChecked() and (
+            self.source_panel.current_mask() is not None
+        )
+        if self._is_playing() and self._media_player is not None:
+            # Switch source if the play mode no longer matches the current preview state.
+            if want_watermarked != self._play_mode_watermarked:
+                self._stop_playback()
+                self._seek_pending_ms = target_ms
+                if want_watermarked:
+                    self._start_watermarked_playback()
+                else:
+                    self._start_original_playback()
+                return
+            self._media_player.setPosition(target_ms)
+            self.spectrogram_view.set_playhead(seconds)
+            return
+        # Not currently playing — queue a seek and start playback.
+        self._seek_pending_ms = target_ms
+        if want_watermarked:
+            self._start_watermarked_playback()
+        else:
+            self._start_original_playback()
 
     def _cleanup_tmp_playback(self) -> None:
         if self._play_tmp_path and os.path.isfile(self._play_tmp_path):
@@ -871,6 +967,21 @@ def _settings_to_params(s: WatermarkSettings) -> WatermarkParams:
     )
 
 
-def _compute_preview(audio: np.ndarray, sr: int, mask: np.ndarray, params: WatermarkParams) -> SpectrogramImage:
-    out = embed_watermark(audio, sr, mask, params)
-    return compute_spectrogram(out, sr)
+def _compute_preview(
+    audio: np.ndarray,
+    sr: int,
+    mask: np.ndarray,
+    params: WatermarkParams,
+    base: SpectrogramImage,
+) -> tuple[SpectrogramImage, np.ndarray]:
+    """Fast preview: localize the embed to the watermark window, then splice that
+    window's spectrogram columns into the cached original spectrogram."""
+    watermarked = embed_watermark_local(audio, sr, mask, params)
+    pad_s = params.n_fft / sr
+    t0 = max(0.0, params.start_s - pad_s)
+    t1 = params.start_s + params.duration_s + pad_s
+    patch, c0, c1 = compute_spectrogram_patch(
+        watermarked, base, time_start_s=t0, time_end_s=t1
+    )
+    spec = splice_spectrogram_patch(base, patch, c0, c1)
+    return spec, watermarked

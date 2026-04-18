@@ -1,7 +1,11 @@
 import numpy as np
 from scipy import signal
 
-from spectraglyph.core.watermark import WatermarkParams, embed_watermark
+from spectraglyph.core.watermark import (
+    WatermarkParams,
+    embed_watermark,
+    embed_watermark_local,
+)
 from spectraglyph.core.image_processor import MaskOptions, to_mask
 from PIL import Image
 
@@ -99,3 +103,72 @@ def test_stereo_input_stays_stereo():
     out = embed_watermark(stereo, SR, mask, params)
     assert out.shape == stereo.shape
     assert out.dtype == np.float32
+
+
+def test_local_embed_leaves_audio_outside_window_untouched():
+    audio = _noise(SR, 6.0)
+    mask = _rect_mask(48, 96)
+    params = WatermarkParams(
+        mode="invisible",
+        start_s=2.0,
+        duration_s=1.5,
+        freq_min_hz=16_000,
+        freq_max_hz=20_000,
+        strength_db=-18.0,
+    )
+    out = embed_watermark_local(audio, SR, mask, params)
+
+    assert out.shape == audio.shape
+    # Outside the padded window, samples must be bit-identical to the input.
+    pad = params.n_fft / SR
+    s0 = int((params.start_s - pad) * SR)
+    s1 = int((params.start_s + params.duration_s + pad) * SR)
+    np.testing.assert_array_equal(out[:s0], audio[:s0])
+    np.testing.assert_array_equal(out[s1:], audio[s1:])
+
+
+def test_local_embed_adds_watermark_energy_in_band():
+    audio = _noise(SR, 4.0)
+    mask = _rect_mask(48, 96)
+    params = WatermarkParams(
+        mode="invisible",
+        start_s=1.0,
+        duration_s=2.0,
+        freq_min_hz=16_000,
+        freq_max_hz=20_000,
+        strength_db=-18.0,
+    )
+    out = embed_watermark_local(audio, SR, mask, params)
+
+    def band_energy(x: np.ndarray, lo: float, hi: float) -> float:
+        f, _, Z = signal.stft(x, fs=SR, nperseg=params.n_fft, noverlap=params.n_fft - params.hop)
+        idx = (f >= lo) & (f <= hi)
+        return float(np.mean(np.abs(Z[idx]) ** 2))
+
+    before = band_energy(audio, 16_000, 20_000)
+    after = band_energy(out, 16_000, 20_000)
+    assert after > before * 10
+
+
+def test_local_embed_matches_global_embed_in_window():
+    # The in-window samples should match the global embed_watermark very closely
+    # (both use the same deterministic stamp seed and RMS-based gain).
+    audio = _noise(SR, 5.0)
+    mask = _rect_mask(48, 96)
+    params = WatermarkParams(
+        mode="invisible",
+        start_s=1.5,
+        duration_s=1.5,
+        freq_min_hz=16_000,
+        freq_max_hz=20_000,
+        strength_db=-18.0,
+    )
+    glob = embed_watermark(audio, SR, mask, params)
+    loc = embed_watermark_local(audio, SR, mask, params)
+    pad = params.n_fft / SR
+    s0 = int((params.start_s + 0.1) * SR)  # stay away from the window edges
+    s1 = int((params.start_s + params.duration_s - 0.1) * SR)
+    diff = np.max(np.abs(glob[s0:s1] - loc[s0:s1]))
+    # A few percent of signal amplitude is acceptable — global uses a slightly different
+    # clip-guard path. We just want the watermark to be present and close in level.
+    assert diff < 0.1
