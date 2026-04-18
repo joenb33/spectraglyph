@@ -27,7 +27,16 @@ def extract_section(changelog: str, version: str) -> str | None:
     return "\n".join(lines).strip()
 
 
+def _ensure_utf8_stdout() -> None:
+    """Avoid UnicodeEncodeError on Windows (cp1252) when piping to Set-Content."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, OSError, ValueError):
+        pass
+
+
 def main() -> None:
+    _ensure_utf8_stdout()
     if len(sys.argv) < 2:
         print("Usage: extract_changelog.py <version> [CHANGELOG.md]", file=sys.stderr)
         sys.exit(2)

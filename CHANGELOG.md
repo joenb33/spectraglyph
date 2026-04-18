@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Release artifacts ship as a **versioned `.exe`** on GitHub Releases (no zip wrapper by default).
 - `README`, `CONTRIBUTING`, and `SECURITY` updated for the public repo and workflows.
 
+### Fixed
+
+- **CI / releases:** `extract_changelog.py` forces UTF-8 stdout so the Windows release job can write GitHub Release notes that contain Unicode (for example **→** in menu paths) without failing.
+
 ## [0.1.0] - 2026-04-18
 
 ### Added
