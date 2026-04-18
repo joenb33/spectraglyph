@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import os
+import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +12,19 @@ import soundfile as sf
 
 LOSSLESS_EXTS = {".wav", ".flac", ".aiff", ".aif"}
 LOSSY_EXTS = {".mp3", ".m4a", ".aac", ".ogg", ".opus"}
+
+# If duration or file size exceeds these, the UI may offer loading only a segment first.
+LARGE_FILE_DURATION_S = 120.0
+LARGE_FILE_SIZE_BYTES = 40 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class AudioFileInfo:
+    """Cheap metadata without decoding all PCM samples."""
+
+    duration_s: float
+    sample_rate: int
+    size_bytes: int
 
 
 @dataclass
@@ -32,37 +47,110 @@ def _ffmpeg_exe() -> str:
     return get_ffmpeg_exe()
 
 
-def load_audio(path: str | os.PathLike) -> AudioData:
+def probe_audio_file(path: str | os.PathLike) -> AudioFileInfo:
+    """Read duration and sample rate without loading all samples (fast)."""
+    path = Path(path)
+    size = path.stat().st_size
+    ext = path.suffix.lower()
+    if ext in LOSSLESS_EXTS:
+        info = sf.info(str(path))
+        return AudioFileInfo(
+            duration_s=float(info.duration),
+            sample_rate=int(info.samplerate),
+            size_bytes=size,
+        )
+    duration_s, sr = _probe_compressed_duration_sr(path)
+    return AudioFileInfo(duration_s=duration_s, sample_rate=sr, size_bytes=size)
+
+
+def _probe_compressed_duration_sr(path: Path) -> tuple[float, int]:
+    """Parse ffmpeg -i stderr for Duration and audio sample rate."""
+    ffmpeg = _ffmpeg_exe()
+    cmd = [
+        ffmpeg,
+        "-hide_banner",
+        "-nostdin",
+        "-i",
+        str(path),
+        "-f",
+        "null",
+        "-",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    err = (proc.stderr or "") + (proc.stdout or "")
+    m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", err)
+    if not m:
+        raise RuntimeError("Could not read audio duration (ffmpeg).")
+    h, mi, s = m.groups()
+    duration_s = int(h) * 3600 + int(mi) * 60 + float(s)
+    sr_m = re.search(r"(\d{3,6})\s*Hz", err)
+    sr = int(sr_m.group(1)) if sr_m else 48_000
+    return duration_s, sr
+
+
+def load_audio(
+    path: str | os.PathLike,
+    *,
+    start_s: float = 0.0,
+    duration_s: float | None = None,
+) -> AudioData:
+    """Load PCM. If ``duration_s`` is None, load from ``start_s`` to end of file.
+
+    Partial loads avoid decoding gigabytes when you only need the first minutes.
+    """
     path = Path(path)
     ext = path.suffix.lower()
+    start_s = max(0.0, float(start_s))
 
     if ext in LOSSLESS_EXTS:
-        data, sr = sf.read(str(path), always_2d=False, dtype="float32")
-        return AudioData(samples=data.astype(np.float32, copy=False), sample_rate=int(sr))
+        data = _load_soundfile_segment(path, start_s, duration_s)
+    else:
+        data = _decode_ffmpeg_segment(path, start_s, duration_s)
+    if data.samples.size == 0:
+        raise ValueError("No audio in the selected range.")
+    return data
 
-    # Lossy / compressed formats — decode via ffmpeg to float32 PCM.
-    return _decode_with_ffmpeg(path)
+
+def _load_soundfile_segment(
+    path: Path, start_s: float, duration_s: float | None
+) -> AudioData:
+    info = sf.info(str(path))
+    sr = int(info.samplerate)
+    total_frames = int(info.frames)
+    start_f = min(int(start_s * sr), total_frames)
+    if start_f >= total_frames:
+        raise ValueError("Start time is past the end of the file.")
+    if duration_s is None:
+        stop_f = total_frames
+    else:
+        stop_f = min(total_frames, start_f + max(1, int(float(duration_s) * sr)))
+    data, _sr = sf.read(
+        str(path),
+        start=start_f,
+        stop=stop_f,
+        always_2d=False,
+        dtype="float32",
+    )
+    return AudioData(samples=data.astype(np.float32, copy=False), sample_rate=sr)
 
 
-def _decode_with_ffmpeg(path: Path) -> AudioData:
-    import subprocess
-
+def _decode_ffmpeg_segment(
+    path: Path, start_s: float, duration_s: float | None
+) -> AudioData:
     ffmpeg = _ffmpeg_exe()
-    # Probe sample rate & channel count by asking ffmpeg to output a wav header.
-    # Simpler: decode straight to 32-bit float PCM, stereo preserved, native sample rate.
     cmd = [
         ffmpeg,
         "-hide_banner",
         "-loglevel",
         "error",
+        "-ss",
+        f"{start_s:.6f}",
         "-i",
         str(path),
-        "-f",
-        "wav",
-        "-acodec",
-        "pcm_f32le",
-        "-",
     ]
+    if duration_s is not None:
+        cmd += ["-t", f"{float(duration_s):.6f}"]
+    cmd += ["-f", "wav", "-acodec", "pcm_f32le", "-"]
     proc = subprocess.run(cmd, capture_output=True, check=True)
     buf = io.BytesIO(proc.stdout)
     data, sr = sf.read(buf, always_2d=False, dtype="float32")
@@ -101,8 +189,6 @@ def _prep_for_save(samples: np.ndarray) -> np.ndarray:
 def _encode_with_ffmpeg(
     path: Path, samples: np.ndarray, sr: int, bitrate_kbps: int
 ) -> None:
-    import subprocess
-
     ffmpeg = _ffmpeg_exe()
     buf = io.BytesIO()
     sf.write(buf, samples, sr, format="WAV", subtype="FLOAT")

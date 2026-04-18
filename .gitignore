@@ -19,6 +19,8 @@ coverage.xml
 .hypothesis/
 build/
 dist/
+# User data folder when running a built .exe from the repo tree
+SpectraGlyph_data/
 *.spec.bak
 tests/fixtures/output_*.wav
 tests/fixtures/output_*.flac

@@ -4,38 +4,42 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QWidget
 
-LOSSLESS_FILTER = "WAV (*.wav);;FLAC (*.flac)"
-LOSSY_FILTER = "MP3 (*.mp3);;AAC (*.m4a)"
-ALL_FILTER = f"{LOSSLESS_FILTER};;{LOSSY_FILTER}"
+from ..utils.config import normalized_existing_dir
+from .i18n import UIStrings, export_filter_all
 
 
-def ask_export_path(parent: QWidget, suggested_name: str = "watermarked") -> str | None:
+def ask_export_path(
+    parent: QWidget,
+    tr: UIStrings,
+    suggested_name: str = "watermarked",
+    *,
+    initial_dir: str = "",
+) -> str | None:
+    d = normalized_existing_dir(initial_dir)
+    start_path = (
+        str(Path(d) / f"{suggested_name}.wav") if d else f"{suggested_name}.wav"
+    )
     path, _filter = QFileDialog.getSaveFileName(
         parent,
-        "Exportera ljudfil",
-        f"{suggested_name}.wav",
-        ALL_FILTER,
+        tr.export_dialog_title,
+        start_path,
+        export_filter_all(tr),
     )
     if not path:
         return None
     ext = Path(path).suffix.lower()
     if ext in {".mp3", ".m4a", ".aac", ".ogg", ".opus"}:
-        if not _confirm_lossy(parent, ext):
+        if not _confirm_lossy(parent, tr, ext):
             return None
     return path
 
 
-def _confirm_lossy(parent: QWidget, ext: str) -> bool:
+def _confirm_lossy(parent: QWidget, tr: UIStrings, ext: str) -> bool:
+    fmt = ext.lstrip(".").upper()
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Warning)
-    box.setWindowTitle("Lossy format")
-    box.setText(
-        f"Du valde {ext.upper()[1:]}-format.\n\n"
-        "Komprimering med förlust (MP3/AAC) kan dämpa eller ta bort höga "
-        "frekvenser och därmed påverka eller förstöra vattenmärket. "
-        "WAV eller FLAC rekommenderas starkt för att behålla bilden klart synlig.\n\n"
-        "Vill du exportera ändå?"
-    )
+    box.setWindowTitle(tr.lossy_title)
+    box.setText(tr.lossy_body.format(fmt=fmt))
     box.setStandardButtons(QMessageBox.Save | QMessageBox.Cancel)
     box.setDefaultButton(QMessageBox.Cancel)
     return box.exec() == QMessageBox.Save

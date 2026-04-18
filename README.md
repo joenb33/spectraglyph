@@ -29,6 +29,10 @@ Human speech and most music concentrate energy **below ~8 kHz**. SpectraGlyph pa
 | **Live spectrogram** | Pan and resize the **time × frequency** region; preview updates follow your edits. |
 | **Export** | Write **WAV**, **FLAC**, or **MP3** (with a heads-up when codecs affect watermark fidelity). |
 | **Presets + view guide** | Save recipes; **copy FFT settings** to the clipboard so viewers can paste the same view into Audacity and see exactly what you intended. |
+| **Languages** | **Swedish** and **English** — **View → Language** (saved under the [paths in Localization](#localization)). |
+| **Shortcuts & help** | **Ctrl+O** / **Ctrl+I** / **Ctrl+E**; **Help → Keyboard shortcuts…** lists them. |
+| **Where data is stored** | Next to **`SpectraGlyph.exe`**: `SpectraGlyph_data\` (settings + presets) when writable; otherwise `%APPDATA%\SpectraGlyph`. Window size and last open/save folders are remembered. |
+| **Long audio** | Files **> ~2 min** or **> ~40 MB** trigger a choice: load everything or only a **time range** (faster). Progress is shown while decoding and building the spectrogram. |
 
 ---
 
@@ -89,7 +93,9 @@ Output: `dist\SpectraGlyph.exe`
 
 ## Localization
 
-The desktop UI is currently **Swedish**; code comments and this README are **English** so the project is approachable for contributors worldwide.
+The desktop UI is available in **Swedish** and **English** (**View → Language** in the app). Code comments and this README are primarily **English** so the project stays approachable for contributors worldwide.
+
+**Where settings are stored:** If you run the **built `.exe`**, presets and language live in a folder next to the executable: `SpectraGlyph_data\` (delete that folder together with the app). If the app cannot create that folder (e.g. install under `Program Files` without write access), it falls back to `%APPDATA%\SpectraGlyph`. Running from **source** (`python main.py`) always uses `%APPDATA%\SpectraGlyph`.
 
 ## Project layout
 

@@ -23,17 +23,22 @@ from PySide6.QtWidgets import (
 
 from ..core.image_processor import MaskOptions, load_image, to_mask
 from ..core.text_renderer import TextStyle, render_text_mask
+from ..utils.config import AppSettings, normalized_existing_dir, save_app_settings
+from .i18n import UIStrings
 
 
 class SourcePanel(QTabWidget):
-    """Tabs: 'Bild' och 'Text'. Emits mask (HxW float32 in 0-1) on change."""
+    """Tabs: image and text. Emits mask (HxW float32 in 0-1) on change."""
 
     mask_changed = Signal(object)  # numpy array or None
 
-    def __init__(self, parent=None):
+    def __init__(self, tr: UIStrings, app_settings: AppSettings, parent=None):
         super().__init__(parent)
+        self._tr = tr
+        self._app_settings = app_settings
         self._image: Image.Image | None = None
         self._image_path: str | None = None
+        self._image_error_detail: str | None = None
         self._current_mask: np.ndarray | None = None
         self._bg_opts = MaskOptions()
 
@@ -43,11 +48,12 @@ class SourcePanel(QTabWidget):
         img_layout.setContentsMargins(10, 8, 10, 8)
 
         row = QHBoxLayout()
-        self._pick_btn = QPushButton("📁 Välj bild…")
+        self._pick_btn = QPushButton(tr.pick_image)
+        self._pick_btn.setToolTip(tr.pick_image_tooltip)
         self._pick_btn.clicked.connect(self._pick_image)
-        self._clear_btn = QPushButton("Rensa")
+        self._clear_btn = QPushButton(tr.clear)
         self._clear_btn.clicked.connect(self._clear_image)
-        self._path_label = QLabel("Ingen bild vald")
+        self._path_label = QLabel(tr.no_image)
         self._path_label.setStyleSheet("color: #889;")
         row.addWidget(self._pick_btn)
         row.addWidget(self._clear_btn)
@@ -61,17 +67,17 @@ class SourcePanel(QTabWidget):
             "QLabel { background: #1a1d22; border: 1px dashed #3a3e46; border-radius: 6px; color: #667; }"
         )
         self._preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self._preview.setText("Dra och släpp en PNG här")
+        self._preview.setText(tr.drop_png_here)
         img_layout.addWidget(self._preview, 1)
 
-        self.addTab(img_tab, "🖼  Bild")
+        self.addTab(img_tab, tr.tab_image)
 
         # --- Text tab ---
         txt_tab = QWidget()
         txt_layout = QVBoxLayout(txt_tab)
         txt_layout.setContentsMargins(10, 8, 10, 8)
         self._text_edit = QTextEdit()
-        self._text_edit.setPlaceholderText("Skriv text som ska ritas i spektrogrammet…")
+        self._text_edit.setPlaceholderText(tr.text_placeholder)
         self._text_edit.setPlainText("HALLÅ")
         self._text_edit.setMaximumHeight(90)
         self._text_edit.textChanged.connect(self._rebuild_text_mask)
@@ -82,12 +88,14 @@ class SourcePanel(QTabWidget):
         self._font_size.setRange(16, 512)
         self._font_size.setValue(128)
         self._font_size.valueChanged.connect(self._rebuild_text_mask)
-        form.addRow("Fontstorlek:", self._font_size)
+        self._label_font_size = QLabel(tr.label_font_size)
+        form.addRow(self._label_font_size, self._font_size)
         self._letter_spacing = QSpinBox()
         self._letter_spacing.setRange(-20, 60)
         self._letter_spacing.setValue(2)
         self._letter_spacing.valueChanged.connect(self._rebuild_text_mask)
-        form.addRow("Radbreddning:", self._letter_spacing)
+        self._label_letter_spacing = QLabel(tr.label_letter_spacing)
+        form.addRow(self._label_letter_spacing, self._letter_spacing)
         txt_layout.addLayout(form)
 
         self._text_preview = QLabel()
@@ -98,12 +106,30 @@ class SourcePanel(QTabWidget):
         )
         txt_layout.addWidget(self._text_preview, 1)
 
-        self.addTab(txt_tab, "🅰  Text")
+        self.addTab(txt_tab, tr.tab_text)
 
         self.currentChanged.connect(lambda _: self._emit())
         self._rebuild_text_mask()
 
     # ---------- Public ----------
+
+    def set_strings(self, tr: UIStrings) -> None:
+        self._tr = tr
+        self._pick_btn.setText(tr.pick_image)
+        self._clear_btn.setText(tr.clear)
+        if self._image_error_detail is not None:
+            self._path_label.setText(tr.image_error.format(detail=self._image_error_detail))
+        elif self._image is None:
+            self._path_label.setText(tr.no_image)
+        elif self._image_path is not None:
+            self._path_label.setText(Path(self._image_path).name)
+        self._preview.setText(tr.drop_png_here)
+        self._text_edit.setPlaceholderText(tr.text_placeholder)
+        self._label_font_size.setText(tr.label_font_size)
+        self._label_letter_spacing.setText(tr.label_letter_spacing)
+        self._pick_btn.setToolTip(tr.pick_image_tooltip)
+        self.setTabText(0, tr.tab_image)
+        self.setTabText(1, tr.tab_text)
 
     def set_bg_options(self, opts: MaskOptions):
         self._bg_opts = opts
@@ -114,11 +140,15 @@ class SourcePanel(QTabWidget):
         try:
             img = load_image(path)
         except Exception as exc:  # noqa: BLE001
-            self._path_label.setText(f"Fel: {exc}")
+            self._image_error_detail = str(exc)
+            self._path_label.setText(self._tr.image_error.format(detail=self._image_error_detail))
             return
+        self._image_error_detail = None
         self._image = img
         self._image_path = path
         self._path_label.setText(Path(path).name)
+        self._app_settings.last_image_dir = str(Path(path).parent)
+        save_app_settings(self._app_settings)
         self.setCurrentIndex(0)
         self._rebuild_image_mask()
 
@@ -127,21 +157,29 @@ class SourcePanel(QTabWidget):
 
     # ---------- Internals ----------
 
+    def open_image_dialog(self) -> None:
+        """Used by keyboard shortcut (Ctrl+I)."""
+        self._pick_image()
+
     def _pick_image(self):
+        tr = self._tr
+        start = normalized_existing_dir(self._app_settings.last_image_dir)
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Välj bild",
-            "",
-            "Bilder (*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff)",
+            tr.pick_image_title,
+            start,
+            tr.pick_image_filter,
         )
         if path:
             self.load_image_path(path)
 
+
     def _clear_image(self):
         self._image = None
         self._image_path = None
-        self._path_label.setText("Ingen bild vald")
-        self._preview.setText("Dra och släpp en PNG här")
+        self._image_error_detail = None
+        self._path_label.setText(self._tr.no_image)
+        self._preview.setText(self._tr.drop_png_here)
         self._preview.setPixmap(QPixmap())
         self._current_mask = None
         self.mask_changed.emit(None)

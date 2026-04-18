@@ -2,7 +2,7 @@
 
 Thanks for your interest in SpectraGlyph.
 
-- **Code and comments** are primarily in **English**; the desktop UI is **Swedish**.
+- **Code and comments** are primarily in **English**; the desktop UI is **Swedish** or **English** (see `src/spectraglyph/gui/i18n.py`).
 - **Run tests** before submitting changes: `pytest -q` (see `README.md`).
 - **Pull requests** should stay focused; match existing style and avoid unrelated refactors.
 
@@ -14,7 +14,7 @@ Thanks for your interest in SpectraGlyph.
    git tag v0.2.0
    git push origin v0.2.0
    ```
-3. The [Release workflow](.github/workflows/release.yml) builds `SpectraGlyph.exe`, zips it, and creates a **GitHub Release** using the matching section from `CHANGELOG.md`.
+3. The [Release workflow](.github/workflows/release.yml) builds `SpectraGlyph.exe`, attaches it to a **GitHub Release**, and fills notes from `CHANGELOG.md` for the tagged version.
 
 ## Preview builds
 

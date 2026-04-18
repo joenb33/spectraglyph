@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 
 from ..core.spectrogram_renderer import SpectrogramImage
+from .i18n import UIStrings
 
 
 class SpectrogramView(pg.GraphicsLayoutWidget):
@@ -13,12 +14,13 @@ class SpectrogramView(pg.GraphicsLayoutWidget):
 
     region_changed = Signal(float, float, float, float)  # start_s, end_s, f_min, f_max
 
-    def __init__(self, parent=None):
+    def __init__(self, tr: UIStrings, parent=None):
         super().__init__(parent)
+        self._tr = tr
         self.setBackground("#14161a")
         self._plot = self.addPlot()
-        self._plot.setLabel("left", "Frekvens", units="Hz")
-        self._plot.setLabel("bottom", "Tid", units="s")
+        self._plot.setLabel("left", tr.axis_frequency, units="Hz")
+        self._plot.setLabel("bottom", tr.axis_time, units="s")
         self._plot.showGrid(x=True, y=True, alpha=0.15)
         self._plot.getAxis("left").setPen(pg.mkPen("#8aa"))
         self._plot.getAxis("bottom").setPen(pg.mkPen("#8aa"))
@@ -30,13 +32,19 @@ class SpectrogramView(pg.GraphicsLayoutWidget):
         self._region: pg.ROI | None = None
         self._freq_lines: tuple[pg.InfiniteLine, pg.InfiniteLine] | None = None
         self._placeholder = pg.TextItem(
-            "Dra in en ljudfil eller klicka 'Välj ljudfil…'",
+            tr.empty_spectrogram_hint,
             color=(180, 180, 200),
             anchor=(0.5, 0.5),
         )
         self._plot.addItem(self._placeholder)
         self._current_spec: SpectrogramImage | None = None
         self._suppress_emit = False
+
+    def set_strings(self, tr: UIStrings) -> None:
+        self._tr = tr
+        self._plot.setLabel("left", tr.axis_frequency, units="Hz")
+        self._plot.setLabel("bottom", tr.axis_time, units="s")
+        self._placeholder.setText(tr.empty_spectrogram_hint)
 
     def set_spectrogram(self, spec: SpectrogramImage | None):
         self._current_spec = spec

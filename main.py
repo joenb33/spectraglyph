@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -9,12 +10,14 @@ _src = _here / "src"
 if _src.exists() and str(_src) not in sys.path:
     sys.path.insert(0, str(_src))
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from spectraglyph import APP_DISPLAY_NAME, ORGANIZATION_NAME
+from spectraglyph.gui.i18n import resolve_language, ui_strings
 from spectraglyph.gui.main_window import MainWindow
+from spectraglyph.utils.config import load_app_settings
 
 
 APP_QSS = """
@@ -68,11 +71,17 @@ QTabBar::tab {
 QTabBar::tab:selected { background: #232831; color: #e8ecf3; }
 QStatusBar { background: #1b1e24; color: #a8b0bc; }
 QSplitter::handle { background: #14161a; }
+QMenuBar { background: #1b1e24; color: #c8cdd5; }
+QMenuBar::item:selected { background: #2c323d; }
+QMenu { background: #1b1e24; color: #e0e3ea; border: 1px solid #262a31; }
+QMenu::item:selected { background: #3a7bd5; color: white; }
 """
 
 
 def main() -> int:
     app = QApplication(sys.argv)
+    n = os.cpu_count() or 4
+    QThreadPool.globalInstance().setMaxThreadCount(max(2, min(6, n)))
     app.setApplicationName(APP_DISPLAY_NAME)
     app.setOrganizationName(ORGANIZATION_NAME)
     app.setStyle("Fusion")
@@ -82,7 +91,10 @@ def main() -> int:
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    win = MainWindow()
+    lang_settings = load_app_settings()
+    resolved = resolve_language(lang_settings.ui_language)
+    tr = ui_strings(resolved)
+    win = MainWindow(tr, lang_settings)
     if icon_path.exists():
         win.setWindowIcon(QIcon(str(icon_path)))
     win.show()
