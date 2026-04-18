@@ -11,14 +11,21 @@ class _WorkerSignals(QObject):
 
 
 class Worker(QRunnable):
-    """Tiny wrapper: runs `fn(*args, **kwargs)` off the GUI thread and emits result/error."""
+    """Runs ``fn`` in the thread pool; results are emitted via ``signals``.
+
+    Pass ``parent`` (usually the main window) so ``_WorkerSignals`` survives after the
+    pool deletes this runnable: ``QueuedConnection`` delivers to the GUI thread only
+    after ``run()`` returns—without a parent, the signals object can be destroyed first
+    and slots never run. Use ``QueuedConnection`` so GUI slots run on the main thread.
+    """
 
     def __init__(self, fn: Callable[..., Any], *args, **kwargs):
         super().__init__()
+        parent: QObject | None = kwargs.pop("parent", None)
         self.fn = fn
         self.args = args
         self.kwargs = kwargs
-        self.signals = _WorkerSignals()
+        self.signals = _WorkerSignals(parent)
 
     @Slot()
     def run(self):

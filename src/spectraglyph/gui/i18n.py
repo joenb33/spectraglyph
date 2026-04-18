@@ -22,6 +22,20 @@ class UIStrings:
     shortcuts_action: str
     shortcuts_dialog_title: str
     shortcuts_dialog_body: str
+    check_updates_action: str
+    update_check_progress: str
+    update_up_to_date_title: str
+    update_up_to_date_body: str
+    update_available_title: str
+    update_available_body: str
+    update_open_release: str
+    update_download: str
+    update_downloading: str
+    update_download_done: str
+    update_download_failed: str
+    update_error_title: str
+    update_error_body: str
+    update_no_download: str
 
     # File menu + recents
     menu_file: str
@@ -166,6 +180,26 @@ def _sv() -> UIStrings:
             "• Välj bild — Ctrl+I\n"
             "• Exportera ljud — Ctrl+E\n"
             "• Spela upp / stoppa — Mellanslag\n"
+        ),
+        check_updates_action="Sök efter uppdateringar…",
+        update_check_progress="Kontrollerar GitHub…",
+        update_up_to_date_title="Du har senaste versionen",
+        update_up_to_date_body="Installerad version: {version}",
+        update_available_title="Ny version finns",
+        update_available_body=(
+            "Installerad: {current}\nSenaste: {latest}\n\n"
+            "Öppna releasesidan för att läsa mer, eller ladda ner den nya "
+            "Windows-installern till din nedladdningsmapp."
+        ),
+        update_open_release="Öppna releasesida",
+        update_download="Ladda ner ny version…",
+        update_downloading="Laddar ner…",
+        update_download_done="Klart. Fil sparad:\n{path}\n\nStäng SpectraGlyph och kör den nya .exe-filen.",
+        update_download_failed="Nedladdning misslyckades: {msg}",
+        update_error_title="Kunde inte söka efter uppdateringar",
+        update_error_body="{msg}",
+        update_no_download=(
+            "Ingen Windows-fil hittades i releasen. Öppna releasesidan och ladda ner manuellt."
         ),
         menu_file="Arkiv",
         file_open="Öppna ljudfil…",
@@ -316,6 +350,28 @@ def _en() -> UIStrings:
             "• Choose image — Ctrl+I\n"
             "• Export audio — Ctrl+E\n"
             "• Play / stop — Space\n"
+        ),
+        check_updates_action="Check for updates…",
+        update_check_progress="Checking GitHub…",
+        update_up_to_date_title="You’re up to date",
+        update_up_to_date_body="Installed version: {version}",
+        update_available_title="Update available",
+        update_available_body=(
+            "Installed: {current}\nLatest: {latest}\n\n"
+            "Open the release page for notes, or download the new Windows "
+            "installer to your Downloads folder."
+        ),
+        update_open_release="Open release page",
+        update_download="Download new version…",
+        update_downloading="Downloading…",
+        update_download_done=(
+            "Done. Saved to:\n{path}\n\nQuit SpectraGlyph and run the new .exe."
+        ),
+        update_download_failed="Download failed: {msg}",
+        update_error_title="Could not check for updates",
+        update_error_body="{msg}",
+        update_no_download=(
+            "No Windows .exe was attached to this release. Open the release page and download manually."
         ),
         menu_file="File",
         file_open="Open audio…",

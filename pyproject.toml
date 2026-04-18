@@ -1,6 +1,6 @@
 [project]
 name = "spectraglyph"
-version = "0.2.2"
+version = "0.2.3"
 description = "SpectraGlyph — hide your logo in sound; reveal it in the spectrogram"
 readme = "README.md"
 license = { text = "MIT" }

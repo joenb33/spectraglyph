@@ -17,8 +17,13 @@ htmlcov/
 coverage.xml
 *.cover
 .hypothesis/
+# PyInstaller / local packaging (one-file exe: everything stays under these trees)
 build/
 dist/
+# If you copy the built exe to the repo root for quick testing
+/SpectraGlyph.exe
+# Same as CI/release asset name when copied locally for smoke tests
+SpectraGlyph-*-Windows-x64.exe
 # User data folder when running a built .exe from the repo tree
 SpectraGlyph_data/
 *.spec.bak

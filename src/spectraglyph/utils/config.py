@@ -26,6 +26,8 @@ class AppSettings:
     splitter_sizes: list[int] = field(default_factory=lambda: [820, 520])
     # Most-recently-opened audio files (most recent first); capped at RECENT_FILES_MAX.
     recent_audio_files: list[str] = field(default_factory=list)
+    # ISO 8601 UTC when we last successfully asked GitHub for the latest release (update check).
+    last_update_check_iso: str = ""
 
 
 RECENT_FILES_MAX = 8
@@ -126,6 +128,7 @@ def load_app_settings() -> AppSettings:
             window_geometry_b64=str(raw.get("window_geometry_b64") or ""),
             splitter_sizes=sizes,
             recent_audio_files=recents[:RECENT_FILES_MAX],
+            last_update_check_iso=str(raw.get("last_update_check_iso") or ""),
         )
     except (json.JSONDecodeError, TypeError, OSError, ValueError):
         return AppSettings()
@@ -164,6 +167,7 @@ def save_app_settings(settings: AppSettings) -> None:
         "window_geometry_b64": settings.window_geometry_b64,
         "splitter_sizes": settings.splitter_sizes,
         "recent_audio_files": settings.recent_audio_files,
+        "last_update_check_iso": settings.last_update_check_iso,
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 

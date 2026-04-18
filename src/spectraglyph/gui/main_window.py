@@ -2,21 +2,24 @@ from __future__ import annotations
 
 import base64
 import binascii
+import datetime
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+from functools import partial
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl
+from PySide6.QtCore import QByteArray, QObject, QStandardPaths, Qt, QTimer, QUrl
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
     QCloseEvent,
+    QDesktopServices,
     QDragEnterEvent,
     QDropEvent,
     QGuiApplication,
@@ -40,7 +43,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import APP_DISPLAY_NAME
+from .. import APP_DISPLAY_NAME, __version__
 from ..core.audio_io import (
     LARGE_FILE_DURATION_S,
     LARGE_FILE_SIZE_BYTES,
@@ -70,6 +73,12 @@ from ..utils.config import (
     normalized_existing_dir,
     save_app_settings,
     update_recent_files,
+)
+from ..utils.github_release import (
+    LatestRelease,
+    compare_versions,
+    download_release_asset,
+    fetch_latest_release,
 )
 from ..utils.worker import Worker, pool
 from .controls_panel import ControlsPanel, WatermarkSettings
@@ -125,6 +134,12 @@ class MainWindow(QMainWindow):
         self._setup_shortcuts()
         self._wire_signals()
         self._update_audio_label()
+
+        self._update_check_timer = QTimer(self)
+        self._update_check_timer.setSingleShot(True)
+        self._update_check_timer.setInterval(4500)
+        self._update_check_timer.timeout.connect(self._scheduled_update_check_if_due)
+        self._update_check_timer.start()
 
     # ---------- UI ----------
 
@@ -259,12 +274,164 @@ class MainWindow(QMainWindow):
         act = QAction(tr.shortcuts_action, self)
         act.triggered.connect(self._show_shortcuts_dialog)
         help_menu.addAction(act)
+        upd = QAction(tr.check_updates_action, self)
+        upd.triggered.connect(self._check_for_updates_menu)
+        help_menu.addAction(upd)
 
     def _show_shortcuts_dialog(self) -> None:
         tr = self._tr
         QMessageBox.information(
             self, tr.shortcuts_dialog_title, tr.shortcuts_dialog_body
         )
+
+    def _scheduled_update_check_if_due(self) -> None:
+        if not getattr(sys, "frozen", False):
+            return
+        raw = self._lang_settings.last_update_check_iso
+        if raw:
+            try:
+                prev = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                if prev.tzinfo is None:
+                    prev = prev.replace(tzinfo=datetime.timezone.utc)
+                now = datetime.datetime.now(datetime.timezone.utc)
+                if (now - prev).total_seconds() < 7 * 24 * 3600:
+                    return
+            except ValueError:
+                pass
+        self._run_update_check(silent_failures=True)
+
+    def _check_for_updates_menu(self) -> None:
+        self._run_update_check(silent_failures=False)
+
+    def _run_update_check(self, *, silent_failures: bool) -> None:
+        self._push_busy()
+        self._hint(self._tr.update_check_progress)
+        w = Worker(fetch_latest_release, parent=self)
+        sig = w.signals
+        w.signals.finished.connect(
+            partial(self._on_release_info_dispatch, sig, silent_failures),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        w.signals.failed.connect(
+            partial(self._on_release_fetch_failed_dispatch, sig, silent_failures),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        pool().start(w)
+
+    def _on_release_fetch_failed_dispatch(
+        self, sig: QObject, silent_failures: bool, msg: str
+    ) -> None:
+        try:
+            self._on_release_fetch_failed(silent_failures, msg)
+        finally:
+            sig.deleteLater()
+
+    def _on_release_fetch_failed(self, silent_failures: bool, msg: str) -> None:
+        self._pop_busy()
+        self._hint(self._tr.status_hint_drop)
+        if not silent_failures:
+            QMessageBox.warning(
+                self,
+                self._tr.update_error_title,
+                self._tr.update_error_body.format(msg=msg),
+            )
+
+    def _on_release_info_dispatch(
+        self, sig: QObject, silent_failures: bool, info: object
+    ) -> None:
+        try:
+            if not isinstance(info, LatestRelease):
+                self._pop_busy()
+                self._hint(self._tr.status_hint_drop)
+                return
+            self._on_release_info(silent_failures, info)
+        finally:
+            sig.deleteLater()
+
+    def _on_release_info(self, silent_failures: bool, info: LatestRelease) -> None:
+        self._pop_busy()
+        self._lang_settings.last_update_check_iso = datetime.datetime.now(
+            datetime.timezone.utc
+        ).isoformat()
+        save_app_settings(self._lang_settings)
+        self._hint(self._tr.status_hint_drop)
+        tr = self._tr
+        if compare_versions(__version__, info.version) >= 0:
+            if not silent_failures:
+                QMessageBox.information(
+                    self,
+                    tr.update_up_to_date_title,
+                    tr.update_up_to_date_body.format(version=__version__),
+                )
+            return
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle(tr.update_available_title)
+        box.setText(
+            tr.update_available_body.format(
+                current=__version__, latest=info.version, url=info.page_url
+            )
+        )
+        open_btn = box.addButton(tr.update_open_release, QMessageBox.ActionRole)
+        dl_btn = box.addButton(tr.update_download, QMessageBox.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Close)
+        box.setDefaultButton(open_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is open_btn and info.page_url:
+            QDesktopServices.openUrl(QUrl(info.page_url))
+        elif clicked is dl_btn:
+            self._download_update(info)
+
+    def _download_update(self, info: LatestRelease) -> None:
+        tr = self._tr
+        if not info.download_url:
+            QMessageBox.information(self, tr.update_available_title, tr.update_no_download)
+            if info.page_url:
+                QDesktopServices.openUrl(QUrl(info.page_url))
+            return
+        folder = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.DownloadLocation
+        )
+        name = info.asset_name or f"SpectraGlyph-{info.version}-Windows-x64.exe"
+        dest = str(Path(folder) / name)
+        self._push_busy()
+        self._hint(tr.update_downloading)
+        w = Worker(download_release_asset, info.download_url, dest, parent=self)
+        sig = w.signals
+        w.signals.finished.connect(
+            partial(self._on_update_download_done_dispatch, sig, dest),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        w.signals.failed.connect(
+            partial(self._on_update_download_failed_dispatch, sig),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        pool().start(w)
+
+    def _on_update_download_done_dispatch(self, sig: QObject, dest: str, _result: object) -> None:
+        try:
+            self._pop_busy()
+            self._hint(self._tr.status_hint_drop)
+            QMessageBox.information(
+                self,
+                self._tr.update_available_title,
+                self._tr.update_download_done.format(path=dest),
+            )
+        finally:
+            sig.deleteLater()
+
+    def _on_update_download_failed_dispatch(self, sig: QObject, msg: str) -> None:
+        try:
+            self._pop_busy()
+            self._hint(self._tr.status_hint_drop)
+            QMessageBox.warning(
+                self,
+                self._tr.update_error_title,
+                self._tr.update_download_failed.format(msg=msg),
+            )
+        finally:
+            sig.deleteLater()
 
     def _build_language_menu(self) -> None:
         tr = self._tr
@@ -462,10 +629,31 @@ class MainWindow(QMainWindow):
         tr = self._tr
         self._show_load_progress(tr.progress_loading_audio)
         self._hint(tr.reading_file.format(name=Path(path).name))
-        w = Worker(load_audio, path, start_s=start_s, duration_s=duration_s)
-        w.signals.finished.connect(lambda a: self._on_audio_loaded(a, path))
-        w.signals.failed.connect(self._on_load_audio_failed)
+        w = Worker(
+            load_audio, path, start_s=start_s, duration_s=duration_s, parent=self
+        )
+        sig = w.signals
+        w.signals.finished.connect(
+            partial(self._on_audio_loaded_dispatch, sig, path),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        w.signals.failed.connect(
+            partial(self._on_load_audio_failed_dispatch, sig),
+            Qt.ConnectionType.QueuedConnection,
+        )
         pool().start(w)
+
+    def _on_load_audio_failed_dispatch(self, sig: QObject, msg: str) -> None:
+        try:
+            self._on_load_audio_failed(msg)
+        finally:
+            sig.deleteLater()
+
+    def _on_audio_loaded_dispatch(self, sig: QObject, path: str, audio: AudioData) -> None:
+        try:
+            self._on_audio_loaded(audio, path)
+        finally:
+            sig.deleteLater()
 
     def _on_load_audio_failed(self, msg: str) -> None:
         self._hide_load_progress()
@@ -498,23 +686,33 @@ class MainWindow(QMainWindow):
         )
         self.controls_panel.set_export_enabled(True)
         self._show_load_progress(tr.progress_spectrogram)
-        w = Worker(compute_spectrogram, audio.samples, audio.sample_rate)
-        w.signals.finished.connect(self._on_spec_ready)
-        w.signals.failed.connect(self._on_spec_failed)
+        w = Worker(
+            compute_spectrogram, audio.samples, audio.sample_rate, parent=self
+        )
+        w.signals.finished.connect(self._on_spec_ready, Qt.ConnectionType.QueuedConnection)
+        w.signals.failed.connect(self._on_spec_failed, Qt.ConnectionType.QueuedConnection)
         pool().start(w)
 
     def _on_spec_failed(self, msg: str) -> None:
-        self._hide_load_progress()
-        self._pop_busy()
-        self._error(self._tr.spectrogram_error.format(msg=msg))
+        try:
+            self._hide_load_progress()
+            self._pop_busy()
+            self._error(self._tr.spectrogram_error.format(msg=msg))
+        finally:
+            if (s := self.sender()) is not None:
+                s.deleteLater()
 
     def _on_spec_ready(self, spec: SpectrogramImage):
-        self._hide_load_progress()
-        self._pop_busy()
-        self._spec_original = spec
-        self.spectrogram_view.set_spectrogram(spec)
-        self._apply_region_from_settings()
-        self._schedule_preview()
+        try:
+            self._hide_load_progress()
+            self._pop_busy()
+            self._spec_original = spec
+            self.spectrogram_view.set_spectrogram(spec)
+            self._apply_region_from_settings()
+            self._schedule_preview()
+        finally:
+            if (s := self.sender()) is not None:
+                s.deleteLater()
 
     def _update_audio_label(self):
         tr = self._tr
@@ -590,10 +788,29 @@ class MainWindow(QMainWindow):
         audio = self._audio.samples
         sr = self._audio.sample_rate
         base = self._spec_original
-        w = Worker(_compute_preview, audio, sr, mask, params, base)
-        w.signals.finished.connect(self._on_preview_ready)
-        w.signals.failed.connect(lambda m: self._preview_failed(m))
+        w = Worker(_compute_preview, audio, sr, mask, params, base, parent=self)
+        sig = w.signals
+        w.signals.finished.connect(
+            partial(self._on_preview_ready_dispatch, sig),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        w.signals.failed.connect(
+            partial(self._on_preview_failed_dispatch, sig),
+            Qt.ConnectionType.QueuedConnection,
+        )
         pool().start(w)
+
+    def _on_preview_ready_dispatch(self, sig: QObject, result: tuple) -> None:
+        try:
+            self._on_preview_ready(result)
+        finally:
+            sig.deleteLater()
+
+    def _on_preview_failed_dispatch(self, sig: QObject, msg: str) -> None:
+        try:
+            self._preview_failed(msg)
+        finally:
+            sig.deleteLater()
 
     def _on_preview_ready(self, result: tuple):
         self._pending_preview = False
@@ -696,10 +913,29 @@ class MainWindow(QMainWindow):
             save_audio(tmp.name, AudioData(samples=out, sample_rate=audio.sample_rate))
             return (tmp.name, out)
 
-        w = Worker(do_render)
-        w.signals.finished.connect(self._on_watermarked_render_ready)
-        w.signals.failed.connect(self._on_playback_render_failed)
+        w = Worker(do_render, parent=self)
+        sig = w.signals
+        w.signals.finished.connect(
+            partial(self._on_watermarked_render_dispatch, sig),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        w.signals.failed.connect(
+            partial(self._on_playback_render_failed_dispatch, sig),
+            Qt.ConnectionType.QueuedConnection,
+        )
         pool().start(w)
+
+    def _on_watermarked_render_dispatch(self, sig: QObject, result: tuple) -> None:
+        try:
+            self._on_watermarked_render_ready(result)
+        finally:
+            sig.deleteLater()
+
+    def _on_playback_render_failed_dispatch(self, sig: QObject, msg: str) -> None:
+        try:
+            self._on_playback_render_failed(msg)
+        finally:
+            sig.deleteLater()
 
     def _on_watermarked_render_ready(self, result: tuple) -> None:
         tmp_path, samples = result
@@ -812,10 +1048,29 @@ class MainWindow(QMainWindow):
             save_audio(path, AudioData(samples=out, sample_rate=audio.sample_rate))
             return path
 
-        w = Worker(do_export)
-        w.signals.finished.connect(self._on_export_done)
-        w.signals.failed.connect(self._on_export_failed)
+        w = Worker(do_export, parent=self)
+        sig = w.signals
+        w.signals.finished.connect(
+            partial(self._on_export_done_dispatch, sig),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        w.signals.failed.connect(
+            partial(self._on_export_failed_dispatch, sig),
+            Qt.ConnectionType.QueuedConnection,
+        )
         pool().start(w)
+
+    def _on_export_failed_dispatch(self, sig: QObject, msg: str) -> None:
+        try:
+            self._on_export_failed(msg)
+        finally:
+            sig.deleteLater()
+
+    def _on_export_done_dispatch(self, sig: QObject, path: str) -> None:
+        try:
+            self._on_export_done(path)
+        finally:
+            sig.deleteLater()
 
     def _on_export_failed(self, msg: str) -> None:
         self._pop_busy()

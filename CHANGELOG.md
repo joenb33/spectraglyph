@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-04-18
+
+### Added
+
+- **Help → Check for updates…** queries the [latest GitHub Release](https://github.com/joenb33/spectraglyph/releases/latest), compares semver to the running app, and can open the release page or download the Windows `.exe` to your Downloads folder. The built app also checks automatically about **once per week** (after a short delay on startup) when a new check is due.
+- `last_update_check_iso` in `settings.json` records the last successful GitHub check.
+
+### Fixed
+
+- **Background workers:** `Worker` signal objects are parented to the main window and cleaned up after delivery so **QueuedConnection** slots always run on the GUI thread without hanging or losing the signal when the thread pool deletes the runnable.
+
 ## [0.2.2] - 2026-04-18
 
 ### Added
@@ -58,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial public release: embed images or text as a near-inaudible spectral watermark in exported audio (WAV / FLAC / MP3).
 - Swedish desktop UI (PySide6), live spectrogram preview, masking tools, presets, and export with viewer-oriented FFT hints.
 
+[0.2.3]: https://github.com/joenb33/spectraglyph/releases/tag/v0.2.3
 [0.2.2]: https://github.com/joenb33/spectraglyph/releases/tag/v0.2.2
 [0.2.1]: https://github.com/joenb33/spectraglyph/releases/tag/v0.2.1
 [0.2.0]: https://github.com/joenb33/spectraglyph/releases/tag/v0.2.0

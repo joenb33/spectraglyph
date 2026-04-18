@@ -141,6 +141,7 @@ def _decode_ffmpeg_segment(
     cmd = [
         ffmpeg,
         "-hide_banner",
+        "-nostdin",
         "-loglevel",
         "error",
         "-ss",
@@ -197,6 +198,7 @@ def _encode_with_ffmpeg(
     cmd = [
         ffmpeg,
         "-hide_banner",
+        "-nostdin",
         "-loglevel",
         "error",
         "-y",
