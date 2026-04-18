@@ -1,0 +1,112 @@
+# Build SpectraGlyph.exe with PyInstaller and publish a GitHub Release.
+#
+# Stable releases: push an annotated-style semver tag v* that matches [project].version in pyproject.toml.
+# Preview / CI builds: push to the "release" branch, or run this workflow manually (workflow_dispatch).
+# Pushes to "main" alone do not publish a release.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+    branches:
+      - release
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: spectraglyph-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Read package version
+        id: pkg
+        shell: pwsh
+        run: |
+          $v = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          echo "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Verify tag matches pyproject (stable releases only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $tagVer = "${{ github.ref_name }}".Substring(1)
+          $pv = "${{ steps.pkg.outputs.version }}"
+          if ($tagVer -ne $pv) {
+            Write-Error "Git tag must be v$pv to match pyproject.toml [project].version (got v$tagVer)."
+            exit 1
+          }
+
+      - name: Build standalone exe
+        run: pyinstaller pyinstaller.spec
+
+      - name: Zip artifact
+        id: zip
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.pkg.outputs.version }}"
+          $name = "SpectraGlyph-${ver}-Windows-x64.zip"
+          Compress-Archive -Path "dist\SpectraGlyph.exe" -DestinationPath $name -Force
+          echo "zip_name=$name" >> $env:GITHUB_OUTPUT
+
+      - name: Write release notes from CHANGELOG (stable)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $v = "${{ steps.pkg.outputs.version }}"
+          python .github/scripts/extract_changelog.py $v | Set-Content -Path release_body.md -Encoding utf8
+
+      - name: Write preview release notes
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        shell: pwsh
+        run: |
+          $sha = "${{ github.sha }}"
+          $ref = "${{ github.ref_name }}"
+          @"
+          **Preview build** from ``$ref`` @ ``$sha``.
+
+          For a stable release asset and notes from ``CHANGELOG.md``, tag ``main`` with ``v*`` matching ``[project].version`` in ``pyproject.toml`` (for example ``v0.1.0`` when the package version is ``0.1.0``), then push that tag.
+          "@ | Set-Content -Path release_body.md -Encoding utf8
+
+      - name: Publish stable GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_body.md
+          files: ${{ steps.zip.outputs.zip_name }}
+          draft: false
+          prerelease: false
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish preview GitHub Release
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: preview-${{ github.run_id }}
+          name: SpectraGlyph v${{ steps.pkg.outputs.version }} (preview ${{ github.run_number }})
+          body_path: release_body.md
+          files: ${{ steps.zip.outputs.zip_name }}
+          prerelease: true
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,36 @@
+[project]
+name = "spectraglyph"
+version = "0.1.0"
+description = "SpectraGlyph — hide your logo in sound; reveal it in the spectrogram"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Joen Berg" }]
+requires-python = ">=3.10"
+keywords = ["spectrogram", "watermark", "audio", "steganography", "qt", "pyside6"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+
+[project.urls]
+Homepage = "https://github.com/joenb33/spectraglyph"
+Repository = "https://github.com/joenb33/spectraglyph"
+Issues = "https://github.com/joenb33/spectraglyph/issues"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
